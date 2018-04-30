@@ -1,0 +1,133 @@
+---
+title: "DATA 607 - Assignment 13 [NoSQL migration]"
+author: "Simon U."
+date: "April 29, 2018"
+output: html_document
+params:
+  api_key: Enter NYTimes API Key
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+api.key <- params$api_key
+```
+
+```{r lib, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(kableExtra)
+library(httr)
+library(jsonlite)
+library(rmongodb)
+```
+
+***
+
+####For this assignment I chose to use **MongoDB** for NoSQL data migration.
+To reproduce this process, you will need to choose *"Knit with Parameters..."* and provide value for the [nytimes] **api_key** parameter.
+
+Below are the steps that illustrate the migration process
+
+***
+
+####Create a function to be used for data migration into MongoDB database
+The function, ***mongoimport.df*** will import a given data frame [table] structure into MongoDB by converting each row into a JSON document and inserting the document into the database.  
+Parameter List:  
+  1.  mongo - connection to MongoDB  
+  2.  ns - namespace `"<db name>.<collection>"`  
+  3.  df - data frame  
+```{r mongoimport.df_func, warning=FALSE}
+mongoimport.df <- function(mongo, ns, df) {
+  for (i in c(1:dim(df)[1])) {
+    json <- toJSON(as.list(df[i,]))
+    b <- mongo.bson.from.JSON(json)
+    mongo.insert(mongo, ns, b)
+  }
+}
+```
+Such function can be used for the purpose of migrating from a relational database, by first running a SQL and getting results into a data frame.  The data frame can then be given as a parameter to the ***mongoimport.df*** function to be imported into MongoDB.  For this assignment, however, instead of using a relational database, I decided to reuse the function which I built to query NYTimes API for travel related articles and deliver the search results into a data frame.  This illustrates function reusability and being agnostic as to where the data is coming from, by coding to a common data structure, such as data frame.
+
+***
+
+####Create an R wrapper funciton for NYTimes Article Search API
+The function will search Travel section and news desk for articles matching given query term word(s), such as a country name, for example.  It is designed to return a data frame with 4 columns:  
+  1.  headline  
+  2.  publication date  
+  3.  web url  
+  4.  snippet  
+```{r nyt_search_function, warning=FALSE}
+nytimes.articleSearch.on.travel <- function(api_key = NA, qryTermTravelPlace = "New York", begin_date = "yyyymmdd", end_date = "yyyymmdd") {
+  baseUrl <- "https://api.nytimes.com/svc/search/v2/articlesearch.json"
+  
+  baseUrlParam <- URLencode(
+    sprintf("?fq=section_name:(\"Travel\") OR news_desk:(\"Travel\")&fl=%s&api-key=%s",
+            "web_url,snippet,headline,pub_date,print_page", api_key))
+  
+  qryTermParam <- URLencode(sprintf("&q=%s", qryTermTravelPlace))
+  
+  qryBeginDate <- ""
+  if (begin_date != "yyyymmdd" && !is.na(begin_date)) {
+    qryBeginDate <- sprintf("&begin_date=%s", begin_date)
+  }
+  
+  qryEndDate <- ""
+  if (end_date != "yyyymmdd" && !is.na(end_date)) {
+    qryEndDate <- sprintf("&end_date=%s", end_date)
+  }
+  
+  qryResult <- GET(paste0(baseUrl, baseUrlParam, qryTermParam, qryBeginDate, qryEndDate))
+
+  df.content <- fromJSON(content(qryResult, "text"))
+  
+  df.on.Travel <- data.frame(
+    headline = df.content[["response"]][["docs"]][["headline"]][["main"]],
+    pub_date = df.content[["response"]][["docs"]][["pub_date"]],
+    web_url = df.content[["response"]][["docs"]][["web_url"]],
+    snippet = df.content[["response"]][["docs"]][["snippet"]],
+    stringsAsFactors = FALSE
+  )
+  
+  return(df.on.Travel)
+}
+```
+
+***
+
+####Retrieve the travel search data using the NYTimes API and import the results into MongoDB
+```{r qry_data}
+df.nytimes.Travel <- nytimes.articleSearch.on.travel(api.key, "Costa Rica") %>% arrange(desc(pub_date))
+kable_styling(knitr::kable(df.nytimes.Travel, "html", caption = "Travel Search Results for Costa Rica"), bootstrap_options = "striped")
+```
+
+Establish connection to MongoDB
+```{r mongo_connection}
+mongo <- mongo.create(host = "localhost")
+# test if connection is active
+mongo.is.connected(mongo)
+```
+
+Import the data
+```{r import_qry_results}
+ns <- "nytimes.travel"
+mongoimport.df(mongo, ns, df.nytimes.Travel)
+```
+
+Inspect Imported Documents using the MongoDB Compass (admin tool)
+![](C:/Users/simus/Documents/R/R Markdown/mongodb_compass_assignment13_01.png)
+
+***
+
+####Conclusion
+
+**Advantages and Disadvantages of SQL vs. NoSQL databases**  
+	. SQL Databases enforce ACID (Atomicity, Consistency, Isolation and Durability) compliance  
+	. NoSQL focus on better response time, scale (availability  and performance)  
+	. SQL can be an easier syntax to work with rather than JSON, Java based and etc. for NoSQL  
+	. NoSQL provides more flexibility in terms of structure and so development can be faster  
+	. SQL DBs help design and enforce "normalized" data  
+
+***
+
+**NYTimes Attribution Requirement**  
+*The logo links directly to http://developer.nytimes.com*  
+
+[![](C:/Users/simus/Documents/R/R Markdown/poweredby_nytimes_200a.png)](http://developer.nytimes.com)
